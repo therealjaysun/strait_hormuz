@@ -1,17 +1,21 @@
 // SimulationEngine — master orchestrator for the battle simulation
 // GDD Sections 7.1, 7.2.5, 11.3
 
-import { SIMULATION, MAP, COMBAT } from '../data/constants.js';
+import { SIMULATION, MAP, COMBAT, AIR_MISSION_PHASES } from '../data/constants.js';
 import { defenderEquipment } from '../data/defenderEquipment.js';
 import { attackerEquipment } from '../data/attackerEquipment.js';
+import { getAirLaunchSource } from '../data/mapData.js';
 import { createRNG } from '../utils/random.js';
-import { distance } from '../utils/geometry.js';
+import { distance, angleBetween } from '../utils/geometry.js';
 import PathfindingSystem from './PathfindingSystem.js';
 import DetectionSystem from './DetectionSystem.js';
 import CombatResolver from './CombatResolver.js';
 import MineSystem from './MineSystem.js';
 
 const NM_TO_WORLD = MAP.NM_TO_WORLD;
+const ATTACKER_INGRESS_PROGRESS = -0.18;
+const MISSILE_SPEED_KT = COMBAT.BASE_MISSILE_SPEED_KT * COMBAT.MISSILE_SPEED_FACTOR;
+const MISSILE_SPEED_WU_PER_SEC = MISSILE_SPEED_KT * NM_TO_WORLD / 3600;
 
 // Tanker names from GDD 8.2.1
 const TANKER_NAMES = [
@@ -35,6 +39,26 @@ function getEntityType(equipData) {
   if (equipData.category === 'AERIAL' || equipData.category === 'DRONE' || equipData.category === 'EW') return 'AIR';
   if (equipData.category === 'SUBMARINE') return 'SUBSURFACE';
   return 'SURFACE';
+}
+
+function isAirEntity(entity) {
+  return entity.type === 'AIR';
+}
+
+function isAirOperational(entity) {
+  return !isAirEntity(entity) || entity.missionPhase === AIR_MISSION_PHASES.ON_STATION;
+}
+
+function isPositionOnScreen(position, margin = 0) {
+  if (!position) return false;
+  return position.x >= -margin
+    && position.x <= MAP.WIDTH + margin
+    && position.y >= -margin
+    && position.y <= MAP.HEIGHT + margin;
+}
+
+function isAttackerFormationZone(zoneId) {
+  return !!zoneId && (zoneId.startsWith('convoy_') || zoneId.startsWith('fwd_'));
 }
 
 // Name counters for entity display names
@@ -102,6 +126,7 @@ export default class SimulationEngine {
     this.entities = [];
     this.events = [];
     this.destroyedEntities = [];
+    this.pendingShots = [];
 
     // Initialize all entities
     this.initializeEntities(config);
@@ -188,9 +213,10 @@ export default class SimulationEngine {
       const tankerRoute = routeAssignments[i];
       const pf = this.pathfindingSystems[tankerRoute] || this.pathfinding;
       const tankerPositions = pf.initTankerPositions();
-      const startPos = pf.getPositionAtProgress(0);
       // Stagger tankers on same route
       const sameRouteBefore = routeAssignments.slice(0, i).filter(r => r === tankerRoute).length;
+      const tankerStart = tankerPositions[sameRouteBefore] || { progress: 0, distanceTraveled: 0, startDelay: 0 };
+      const startPos = pf.getPositionAtProgress(tankerStart.progress, true);
       this.entities.push({
         id: `tanker_${i}`,
         assetId: 'tanker',
@@ -198,8 +224,9 @@ export default class SimulationEngine {
         faction: 'ATTACKER',
         type: 'TANKER',
         position: { ...startPos },
-        rotation: 0,
+        rotation: pf.getHeadingAtProgress(tankerStart.progress),
         speed: 15,
+        baseSpeed: 15,
         hp: 100,
         maxHp: 100,
         damage: 0,
@@ -218,9 +245,9 @@ export default class SimulationEngine {
         detectedBy: new Set(),
         assignedZone: null,
         assignedRoute: tankerRoute,
-        progress: 0,
-        distanceTraveled: 0,
-        startDelay: tankerPositions[sameRouteBefore]?.startDelay || sameRouteBefore * (40 / (25 * NM_TO_WORLD / 3600)),
+        progress: tankerStart.progress,
+        distanceTraveled: tankerStart.distanceTraveled,
+        startDelay: tankerStart.startDelay,
         cost: 0,
       });
     }
@@ -242,6 +269,7 @@ export default class SimulationEngine {
         position: { ...mine.position },
         rotation: 0,
         speed: 0,
+        baseSpeed: 0,
         hp: 1,
         maxHp: 1,
         damage: COMBAT.MINE_DAMAGE,
@@ -270,17 +298,72 @@ export default class SimulationEngine {
    */
   createEntity(id, equipData, faction, position, zoneId, isDroneUnit = false) {
     const type = isDroneUnit ? 'AIR' : getEntityType(equipData);
+    const stationPosition = { ...position };
+    const pf = this.pathfindingSystems[this.convoyRoute] || this.pathfinding;
+    const attackerFormationAsset = faction === 'ATTACKER' && isAttackerFormationZone(zoneId);
+    const attackerRouteFollower = faction === 'ATTACKER'
+      && type !== 'AIR'
+      && type !== 'TANKER'
+      && type !== 'FIXED'
+      && !attackerFormationAsset;
+    const launchSource = type === 'AIR'
+      ? getAirLaunchSource(equipData.id, faction, zoneId, stationPosition)
+      : null;
+    const routeProjection = attackerRouteFollower || faction === 'ATTACKER'
+      ? pf.getLateralOffsetForPoint(stationPosition)
+      : null;
+    const attackerAirIngressSpawn = faction === 'ATTACKER' && type === 'AIR'
+      ? routeProjection
+        ? pf.getOffsetPositionAtProgress(ATTACKER_INGRESS_PROGRESS, routeProjection.lateralOffset)
+        : { x: -120, y: stationPosition.y }
+      : null;
+    const launchPosition = attackerAirIngressSpawn
+      ? { ...attackerAirIngressSpawn }
+      : launchSource ? { ...launchSource.position } : { ...position };
+    const syncedLaunchDelay = faction === 'ATTACKER' && type === 'AIR' && routeProjection
+      ? Math.max(
+          0,
+          pf.getConvoyArrivalTime(routeProjection.progress)
+            - (distance(launchPosition, stationPosition) / Math.max(1, equipData.speed * NM_TO_WORLD / 3600))
+        )
+      : 0;
+    const startsOnStation = type !== 'AIR'
+      || distance(launchPosition, stationPosition) <= SIMULATION.AIR_STATION_ARRIVAL_RADIUS;
+    const attackerRouteSpawn = attackerRouteFollower && routeProjection
+      ? pf.getOffsetPositionAtProgress(ATTACKER_INGRESS_PROGRESS, routeProjection.lateralOffset)
+      : null;
+    const attackerFormationSpawn = attackerFormationAsset
+      ? pf.getFormationPositionAtProgress(zoneId, ATTACKER_INGRESS_PROGRESS)
+      : null;
+    const initialRotation = type === 'AIR' && !startsOnStation
+      ? angleBetween(launchPosition, stationPosition)
+      : attackerFormationAsset || attackerRouteFollower || attackerAirIngressSpawn
+        ? pf.getHeadingAtProgress(ATTACKER_INGRESS_PROGRESS)
+        : 0;
 
-    return {
+    const entity = {
       id,
       assetId: equipData.id,
       name: isDroneUnit ? `Shahed-${id.split('_')[1]}` : equipData.name,
       faction,
       type,
-      position: { ...position },
-      homePosition: { ...position },
-      rotation: 0,
+      position: type === 'AIR'
+        ? { ...launchPosition }
+        : attackerFormationSpawn ? { ...attackerFormationSpawn }
+          : attackerRouteSpawn ? { ...attackerRouteSpawn }
+          : { ...position },
+      homePosition: { ...stationPosition },
+      stationPosition: { ...stationPosition },
+      launchPosition: type === 'AIR' ? { ...launchPosition } : null,
+      launchSourceId: launchSource?.id || null,
+      launchSourceName: launchSource?.name || null,
+      missionPhase: type === 'AIR'
+        ? (startsOnStation ? AIR_MISSION_PHASES.ON_STATION : AIR_MISSION_PHASES.TRANSIT)
+        : null,
+      launchDelay: type === 'AIR' ? syncedLaunchDelay : 0,
+      rotation: initialRotation,
       speed: equipData.speed,
+      baseSpeed: equipData.speed,
       hp: isDroneUnit ? 10 : equipData.hp,
       maxHp: isDroneUnit ? 10 : equipData.hp,
       damage: isDroneUnit ? 80 : equipData.damage,
@@ -298,6 +381,12 @@ export default class SimulationEngine {
       reloadCooldown: 0,
       detectedBy: new Set(),
       assignedZone: zoneId,
+      assignedRoute: faction === 'ATTACKER' ? this.convoyRoute : null,
+      routeProgress: attackerRouteFollower ? ATTACKER_INGRESS_PROGRESS : null,
+      routeDistanceTraveled: attackerRouteFollower ? ATTACKER_INGRESS_PROGRESS * pf.routeLength : null,
+      routeLateralOffset: attackerRouteFollower && routeProjection ? routeProjection.lateralOffset : 0,
+      routeTargetProgress: routeProjection ? routeProjection.progress : null,
+      followsAssignedRoute: attackerRouteFollower,
       cost: isDroneUnit ? 0 : equipData.cost,
       // Special flags
       isDrone: isDroneUnit,
@@ -315,7 +404,15 @@ export default class SimulationEngine {
       engageTarget: null,
       // Ghadir sub: signature boost after firing
       signatureBoostUntil: 0,
+      hasEnteredScreen: isPositionOnScreen(
+        type === 'AIR'
+          ? launchPosition
+          : attackerFormationSpawn || attackerRouteSpawn || position
+      ),
+      mobilityKilled: false,
     };
+
+    return entity;
   }
 
   /**
@@ -342,10 +439,16 @@ export default class SimulationEngine {
     const escorts = this.entities.filter(e =>
       e.faction === 'ATTACKER' && e.type !== 'TANKER' && e.type !== 'AIR' && e.type !== 'MINE'
       && !e.isDestroyed && e.assignedZone
-      && (e.assignedZone.startsWith('convoy_') || e.assignedZone.startsWith('fwd_'))
+      && isAttackerFormationZone(e.assignedZone)
     );
-    const jammers = this.entities.filter(e => !e.isDestroyed && e.isJamming);
+    const jammers = this.entities.filter(e => !e.isDestroyed && e.isJamming && isAirOperational(e));
     const newEvents = [];
+
+    for (const entity of this.entities) {
+      if (!entity.hasEnteredScreen && isPositionOnScreen(entity.position)) {
+        entity.hasEnteredScreen = true;
+      }
+    }
 
     // 1. Update convoy (tanker) positions — each tanker uses its assigned route
     for (const tanker of tankers) {
@@ -375,24 +478,48 @@ export default class SimulationEngine {
 
       // Escorts handled above
       if (entity.faction === 'ATTACKER' && entity.assignedZone &&
-          (entity.assignedZone.startsWith('convoy_') || entity.assignedZone.startsWith('fwd_'))) {
+          isAttackerFormationZone(entity.assignedZone)) {
         continue;
       }
 
-      // Drone homing behavior
+      if (entity.followsAssignedRoute) {
+        const routePf = (entity.assignedRoute && this.pathfindingSystems[entity.assignedRoute]) || this.pathfinding;
+        routePf.updateRouteFollowingAsset(entity, deltaTime);
+        continue;
+      }
+
+      // Defender drones launch directly into an intercept profile.
       if (entity.isDrone && !entity.isDestroyed) {
+        if (entity.launchDelay > 0) {
+          entity.launchDelay = Math.max(0, entity.launchDelay - deltaTime);
+          entity.engageTarget = null;
+          continue;
+        }
         this.updateDroneHoming(entity, deltaTime);
         continue;
       }
 
-      // Attacker mobile assets advance eastward with the convoy
-      if (entity.faction === 'ATTACKER' && entity.homePosition) {
-        const convoyCenter = this.pathfinding.getConvoyCenter(
-          this.entities.filter(e => e.type === 'TANKER')
+      // Air ingress before station-keeping/engagement
+      if (isAirEntity(entity) && entity.missionPhase === AIR_MISSION_PHASES.TRANSIT) {
+        if (entity.launchDelay > 0) {
+          entity.launchDelay = Math.max(0, entity.launchDelay - deltaTime);
+          entity.engageTarget = null;
+          continue;
+        }
+        entity.engageTarget = null;
+        const arrived = this.pathfinding.updateTransitAsset(
+          entity,
+          entity.stationPosition || entity.homePosition,
+          deltaTime
         );
-        // Advance home position toward convoy center's x coordinate
-        const driftSpeed = 0.5; // how fast home position shifts east
-        entity.homePosition.x += (convoyCenter.x - entity.homePosition.x) * driftSpeed * deltaTime * 0.1;
+        if (arrived) {
+          const station = entity.stationPosition || entity.homePosition || entity.position;
+          entity.position = { ...station };
+          entity.homePosition = { ...station };
+          entity.missionPhase = AIR_MISSION_PHASES.ON_STATION;
+          entity.patrolAngle = null;
+        }
+        continue;
       }
 
       this.pathfinding.updatePatrolAsset(entity, deltaTime, this.rng);
@@ -405,6 +532,15 @@ export default class SimulationEngine {
 
     // 5. Target acquisition
     for (const entity of this.entities) {
+      if (!isAirOperational(entity)) {
+        entity.currentTarget = null;
+        continue;
+      }
+      if (!entity.hasEnteredScreen) {
+        entity.currentTarget = null;
+        entity.engageTarget = null;
+        continue;
+      }
       if (entity.isDestroyed || entity.weaponRange === 0 || entity.damage === 0) continue;
 
       // Coastal missiles need radar coverage
@@ -423,6 +559,8 @@ export default class SimulationEngine {
         e.faction !== entity.faction &&
         !e.isDestroyed &&
         e.type !== 'MINE' &&
+        isAirOperational(e) &&
+        e.hasEnteredScreen &&
         e.detectedBy.has(entity.faction)
       );
 
@@ -455,36 +593,38 @@ export default class SimulationEngine {
         continue;
       }
 
+      if (!target.hasEnteredScreen || !isPositionOnScreen(entity.position) || !isPositionOnScreen(target.position)) {
+        continue;
+      }
+
       const result = this.combat.resolveCombat(entity, target, jammers);
       if (result) {
-        // Add position/faction data for effects renderer
-        result.attackerPosition = { ...entity.position };
-        result.targetPosition = { ...target.position };
-        result.attackerFaction = entity.faction;
+        const shotDistance = distance(entity.position, target.position);
+        const travelTime = shotDistance / Math.max(MISSILE_SPEED_WU_PER_SEC, 0.01);
+        this.pendingShots.push({
+          ...result,
+          impactAt: this.gameTime + travelTime,
+          attackerFaction: entity.faction,
+          attackerPosition: { ...entity.position },
+          targetPosition: { ...target.position },
+          travelTime,
+          visualDurationMs: (travelTime / Math.max(this.speedMultiplier, 0.001)) * 1000,
+        });
 
         newEvents.push({
           tick: this.currentTick,
           gameTime: this.gameTime,
-          type: result.type,
-          data: result,
+          type: 'WEAPON_FIRED',
+          data: {
+            attackerId: entity.id,
+            targetId: target.id,
+            attackerFaction: entity.faction,
+            attackerPosition: { ...entity.position },
+            targetPosition: { ...target.position },
+            hit: result.willHit,
+            visualDurationMs: (travelTime / Math.max(this.speedMultiplier, 0.001)) * 1000,
+          },
         });
-
-        if (result.destroyed) {
-          newEvents.push({
-            tick: this.currentTick,
-            gameTime: this.gameTime,
-            type: 'ASSET_DESTROYED',
-            data: {
-              entityId: target.id,
-              name: target.name,
-              faction: target.faction,
-              destroyedBy: entity.name,
-              position: { ...target.position },
-              maxHp: target.maxHp,
-            },
-          });
-          this.destroyedEntities.push(target);
-        }
 
         // Ghadir sub: boost signature after firing
         if (entity.assetId === 'ghadir_sub') {
@@ -503,6 +643,9 @@ export default class SimulationEngine {
         }
       }
     }
+
+    // 6b. Resolve missile impacts whose travel time has elapsed
+    this.resolvePendingShots(newEvents);
 
     // 7. Mine checks
     const mineDetonations = this.mines.checkDetonations(this.entities);
@@ -593,12 +736,101 @@ export default class SimulationEngine {
     }
   }
 
+  resolvePendingShots(newEvents) {
+    const remainingShots = [];
+
+    for (const shot of this.pendingShots) {
+      if (shot.impactAt > this.gameTime) {
+        remainingShots.push(shot);
+        continue;
+      }
+
+      const target = this.entities.find(e => e.id === shot.targetId);
+      const attacker = this.entities.find(e => e.id === shot.attackerId);
+
+      if (!target || target.isDestroyed) {
+        newEvents.push({
+          tick: this.currentTick,
+          gameTime: this.gameTime,
+          type: 'COMBAT_MISS',
+          data: {
+            ...shot,
+            attackerName: attacker?.name || shot.attackerName,
+            targetName: target?.name || shot.targetName,
+          },
+        });
+        continue;
+      }
+
+      if (!shot.willHit) {
+        newEvents.push({
+          tick: this.currentTick,
+          gameTime: this.gameTime,
+          type: 'COMBAT_MISS',
+          data: {
+            ...shot,
+            attackerName: attacker?.name || shot.attackerName,
+            targetName: target.name,
+            targetPosition: { ...target.position },
+          },
+        });
+        continue;
+      }
+
+      target.hp -= shot.damage;
+      const destroyed = target.hp <= 0;
+      const criticalHit = !destroyed
+        && target.baseSpeed > 0
+        && (shot.damage >= target.maxHp * 0.35 || target.hp <= target.maxHp * 0.25);
+      if (destroyed) {
+        target.hp = 0;
+        target.isDestroyed = true;
+      } else if (criticalHit) {
+        target.speed = 0;
+        target.mobilityKilled = true;
+      }
+
+      newEvents.push({
+        tick: this.currentTick,
+        gameTime: this.gameTime,
+        type: 'COMBAT_HIT',
+        data: {
+          ...shot,
+          destroyed,
+          criticalHit,
+          attackerName: attacker?.name || shot.attackerName,
+          targetName: target.name,
+          targetPosition: { ...target.position },
+        },
+      });
+
+      if (destroyed) {
+        newEvents.push({
+          tick: this.currentTick,
+          gameTime: this.gameTime,
+          type: 'ASSET_DESTROYED',
+          data: {
+            entityId: target.id,
+            name: target.name,
+            faction: target.faction,
+            destroyedBy: attacker?.name || shot.attackerName,
+            position: { ...target.position },
+            maxHp: target.maxHp,
+          },
+        });
+        this.destroyedEntities.push(target);
+      }
+    }
+
+    this.pendingShots = remainingShots;
+  }
+
   /**
    * Drone homing — drones move toward nearest detected enemy (or nearest tanker for defender drones).
    * On contact, deal damage and self-destruct.
    */
   updateDroneHoming(drone, deltaTime) {
-    // Find nearest enemy
+    // Launch straight toward the incoming attacker stream rather than a pre-planned patrol station.
     let target = null;
     let bestDist = Infinity;
 
@@ -606,17 +838,14 @@ export default class SimulationEngine {
       if (e.faction === drone.faction) continue;
       if (e.isDestroyed) continue;
       if (e.type === 'MINE') continue;
-      // Drones home autonomously — no detection required after launch
+      const incomingWeight = e.faction === 'ATTACKER' ? Math.max(0, e.position.x) : e.position.x;
       const d = distance(drone.position, e.position);
-      if (d < bestDist) {
-        // Prioritize tankers for defender drones
-        if (drone.faction === 'DEFENDER' && e.type === 'TANKER') {
-          bestDist = d * 0.5; // Weight tankers higher
-          target = e;
-        } else if (!target || d < bestDist) {
-          bestDist = d;
-          target = e;
-        }
+      const weightedDistance = drone.faction === 'DEFENDER'
+        ? (e.type === 'TANKER' ? d * 0.45 : d * 0.8) + incomingWeight * 0.15
+        : d;
+      if (weightedDistance < bestDist) {
+        bestDist = weightedDistance;
+        target = e;
       }
     }
 
@@ -630,12 +859,26 @@ export default class SimulationEngine {
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist <= maxMove || dist < 3) {
+      if (!target.hasEnteredScreen) {
+        drone.position = {
+          x: drone.position.x + (dx / Math.max(dist, 0.001)) * Math.min(maxMove, dist),
+          y: drone.position.y + (dy / Math.max(dist, 0.001)) * Math.min(maxMove, dist),
+        };
+        drone.rotation = Math.atan2(dy, dx);
+        return;
+      }
       // Impact! Deal damage and self-destruct
       target.hp -= drone.damage;
       const destroyed = target.hp <= 0;
+      const criticalHit = !destroyed
+        && target.baseSpeed > 0
+        && (drone.damage >= target.maxHp * 0.35 || target.hp <= target.maxHp * 0.25);
       if (destroyed) {
         target.hp = 0;
         target.isDestroyed = true;
+      } else if (criticalHit) {
+        target.speed = 0;
+        target.mobilityKilled = true;
       }
       drone.isDestroyed = true;
 
@@ -650,8 +893,10 @@ export default class SimulationEngine {
           attackerName: drone.name,
           targetName: target.name,
           attackerFaction: drone.faction,
+          targetPosition: { ...target.position },
           damage: drone.damage,
           destroyed,
+          criticalHit,
           isDroneImpact: true,
         },
       });
@@ -666,6 +911,8 @@ export default class SimulationEngine {
             name: target.name,
             faction: target.faction,
             destroyedBy: drone.name,
+            position: { ...target.position },
+            maxHp: target.maxHp,
           },
         });
         this.destroyedEntities.push(target);

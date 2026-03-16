@@ -153,10 +153,25 @@ export default function SimulationPhase({ gameState, dispatch, settings = {} }) 
   // Speed change handler
   const handleSpeedChange = useCallback((speed) => {
     const engine = engineRef.current;
-    if (engine) {
+    if (engine && engine.isRunning) {
       engine.setSpeed(speed);
       setHudState(prev => ({ ...prev, speed }));
     }
+  }, []);
+
+  const pauseSimulation = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine || engine.isComplete) return;
+    engine.pause();
+    setShowPauseMenu(true);
+  }, []);
+
+  const resumeSimulation = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine || engine.isComplete) return;
+    engine.start();
+    setShowPauseMenu(false);
+    updateHudState(engine, abilityRef.current);
   }, []);
 
   // Ability activation handler
@@ -265,21 +280,11 @@ export default function SimulationPhase({ gameState, dispatch, settings = {} }) 
           return;
         }
         if (showPauseMenu) {
-          // Resume
-          const engine = engineRef.current;
-          if (engine) {
-            handleSpeedChange(engine._prevSpeed || SIMULATION.DEFAULT_SPEED);
-          }
-          setShowPauseMenu(false);
+          resumeSimulation();
           return;
         }
         // Show pause menu
-        const engine = engineRef.current;
-        if (engine && !engine.isComplete) {
-          engine._prevSpeed = engine.speedMultiplier;
-          handleSpeedChange(0);
-          setShowPauseMenu(true);
-        }
+        pauseSimulation();
         return;
       }
 
@@ -324,11 +329,10 @@ export default function SimulationPhase({ gameState, dispatch, settings = {} }) 
         e.preventDefault();
         const engine = engineRef.current;
         if (engine) {
-          if (engine.speedMultiplier > 0) {
-            engine._prevSpeed = engine.speedMultiplier;
-            handleSpeedChange(0);
+          if (engine.isRunning) {
+            pauseSimulation();
           } else {
-            handleSpeedChange(engine._prevSpeed || SIMULATION.DEFAULT_SPEED);
+            resumeSimulation();
           }
         }
         return;
@@ -342,7 +346,7 @@ export default function SimulationPhase({ gameState, dispatch, settings = {} }) 
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [targetingMode, showShortcuts, showPauseMenu, handleAbilityActivate, handleSpeedChange]);
+  }, [targetingMode, showShortcuts, showPauseMenu, handleAbilityActivate, handleSpeedChange, pauseSimulation, resumeSimulation]);
 
   return (
     <div className="w-full h-full relative" style={{ backgroundColor: '#0a0a14' }}>
@@ -395,11 +399,7 @@ export default function SimulationPhase({ gameState, dispatch, settings = {} }) 
             <div className="flex flex-col gap-3">
               <button
                 className="crt-button py-2 px-8"
-                onClick={() => {
-                  const engine = engineRef.current;
-                  if (engine) handleSpeedChange(engine._prevSpeed || SIMULATION.DEFAULT_SPEED);
-                  setShowPauseMenu(false);
-                }}
+                onClick={resumeSimulation}
                 aria-label="Resume simulation"
               >
                 RESUME

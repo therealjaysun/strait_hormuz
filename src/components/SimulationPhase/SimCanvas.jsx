@@ -28,7 +28,10 @@ function getIconType(entity) {
     COASTAL_MISSILE: 'COASTAL_MISSILE',
     RADAR: 'RADAR',
     MINE_LAYER: 'MINE_LAYER',
-    AERIAL: 'FIGHTER',
+    AERIAL: entity.assetId === 'mh60r_seahawk' ? 'HELICOPTER'
+      : entity.assetId === 'p8_poseidon' ? 'MARITIME_PATROL'
+      : entity.assetId === 'su22_strike' ? 'STRIKE_AIRCRAFT'
+      : 'FIGHTER',
     DRONE: 'DRONE_SWARM',
     EW: 'EW_AIRCRAFT',
     ESCORT: entity.assetId === 'arleigh_burke_ddg' ? 'DESTROYER'
@@ -135,30 +138,33 @@ export default function SimCanvas({ engineRef, playerFaction, onCanvasClick, tar
       // 4. Radar sweeps + effects (below entities)
       effects.render(ctx, width, height, entities, playerFaction, engine.gameTime);
 
-      // 5. Smoke zones
+      // 5. Air transit vectors
+      drawTransitVectors(ctx, entities, scaleX, scaleY, playerFaction);
+
+      // 6. Smoke zones
       effects.renderSmokeZones(ctx, scaleX, scaleY, engine.smokeZones, engine.gameTime);
 
-      // 6. Draw wrecks (destroyed entities)
+      // 7. Draw wrecks (destroyed entities)
       drawWrecks(ctx, entities, scaleX, scaleY, playerFaction);
 
-      // 7. Draw active entities
+      // 8. Draw active entities
       drawEntities(ctx, entities, scaleX, scaleY, playerFaction, time);
 
-      // 8. Entity HUD (health bars, labels)
+      // 9. Entity HUD (health bars, labels)
       renderEntityHUD(ctx, width, height, entities, playerFaction, time);
 
-      // 9. Fog of war
+      // 10. Fog of war
       effects.renderFogOfWar(ctx, width, height, entities, playerFaction);
 
-      // 10. Targeting mode cursor overlay
+      // 11. Targeting mode cursor overlay
       if (targetingMode) {
         drawTargetingOverlay(ctx, width, height, targetingMode);
       }
 
-      // 11. CRT effects
+      // 12. CRT effects
       applyCRTEffects(ctx, width, height);
 
-      // 12. FPS counter
+      // 13. FPS counter
       if (showFps) {
         const fpsData = fpsRef.current;
         fpsData.frames++;
@@ -201,6 +207,34 @@ export default function SimCanvas({ engineRef, playerFaction, onCanvasClick, tar
 }
 
 // --- Helper drawing functions ---
+
+function drawTransitVectors(ctx, entities, scaleX, scaleY, playerFaction) {
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.lineWidth = 1;
+
+  for (const entity of entities) {
+    if (entity.faction !== playerFaction) continue;
+    if (entity.type !== 'AIR' || entity.missionPhase !== 'TRANSIT') continue;
+    if (!entity.stationPosition) continue;
+
+    const x = entity.position.x * scaleX;
+    const y = entity.position.y * scaleY;
+    const sx = entity.stationPosition.x * scaleX;
+    const sy = entity.stationPosition.y * scaleY;
+
+    ctx.strokeStyle = entity.faction === 'ATTACKER'
+      ? 'rgba(51, 153, 255, 0.45)'
+      : 'rgba(255, 51, 51, 0.45)';
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(sx, sy);
+    ctx.stroke();
+  }
+
+  ctx.setLineDash([]);
+  ctx.restore();
+}
 
 function drawRoute(ctx, engine, scaleX, scaleY) {
   // Draw all active routes

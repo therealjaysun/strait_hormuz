@@ -186,35 +186,63 @@ function drawMinesweeper(ctx, color) {
 }
 
 function drawCoastalMissileBattery(ctx) {
-  // Square with upward-pointing arrow
-  ctx.fillRect(-5, -5, 10, 10);
+  // Vehicle base
+  ctx.fillRect(-7, -4, 14, 8);
+  ctx.fillRect(-5, -7, 10, 3);
 
+  // Launcher canisters
+  ctx.strokeStyle = ctx.fillStyle;
+  ctx.lineWidth = 1.3;
   ctx.beginPath();
-  ctx.moveTo(0, -5);
-  ctx.lineTo(-3, -10);
-  ctx.moveTo(0, -5);
-  ctx.lineTo(3, -10);
-  ctx.moveTo(0, -5);
-  ctx.lineTo(0, -12);
-  ctx.lineWidth = 1.5;
+  ctx.moveTo(-3, -7);
+  ctx.lineTo(-7, -13);
+  ctx.lineTo(-1, -13);
+  ctx.closePath();
+  ctx.moveTo(3, -7);
+  ctx.lineTo(-1, -13);
+  ctx.lineTo(5, -13);
+  ctx.closePath();
   ctx.stroke();
+
+  // Wheels / stabilizers
+  ctx.beginPath();
+  ctx.arc(-4, 5, 1.3, 0, Math.PI * 2);
+  ctx.arc(4, 5, 1.3, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 function drawRadarStation(ctx, color) {
-  // Circle with radiating lines
-  ctx.beginPath();
-  ctx.arc(0, 0, 5, 0, Math.PI * 2);
-  ctx.fill();
-
+  // Mast
   ctx.strokeStyle = color;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(0, 8);
+  ctx.lineTo(0, -2);
+  ctx.stroke();
+
+  // Dish / array
+  ctx.beginPath();
+  ctx.arc(0, -6, 5.5, Math.PI * 0.15, Math.PI * 0.85, true);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(-4, -4);
+  ctx.lineTo(4, -8);
+  ctx.stroke();
+
+  // Pedestal
+  ctx.beginPath();
+  ctx.moveTo(-4, 8);
+  ctx.lineTo(0, 3);
+  ctx.lineTo(4, 8);
+  ctx.stroke();
+
+  // Sweep arcs
   ctx.lineWidth = 1;
-  // Radiating lines
-  for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 3) {
-    ctx.beginPath();
-    ctx.moveTo(Math.cos(angle) * 6, Math.sin(angle) * 6);
-    ctx.lineTo(Math.cos(angle) * 10, Math.sin(angle) * 10);
-    ctx.stroke();
-  }
+  ctx.beginPath();
+  ctx.arc(0, -6, 9, -Math.PI / 4, Math.PI / 4);
+  ctx.arc(0, -6, 13, -Math.PI / 5, Math.PI / 5);
+  ctx.stroke();
 }
 
 function drawMineLayer(ctx, color) {

@@ -189,6 +189,22 @@ describe('AIPlacement', () => {
     });
   });
 
+  describe('attacker relative station positions', () => {
+    it('never falls back to the placeholder position for route-relative slots', () => {
+      for (let seed = 1; seed <= 30; seed++) {
+        const rng = seededRng(seed);
+        const result = generateAIPlacement('ATTACKER', 'CRITICAL', ATK_BUDGET, rng);
+        const relativePlacements = result.placements.filter(p =>
+          p.zoneId.startsWith('cap_') || p.zoneId.startsWith('fwd_') || p.zoneId.startsWith('sub_')
+        );
+
+        for (const placement of relativePlacements) {
+          expect(placement.position).not.toEqual({ x: 100, y: 300 });
+        }
+      }
+    });
+  });
+
   describe('no budget exceeded', () => {
     it('total cost never exceeds budget', () => {
       const allEquipment = [...defenderEquipment, ...attackerEquipment];

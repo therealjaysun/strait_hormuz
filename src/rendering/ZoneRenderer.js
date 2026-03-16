@@ -97,11 +97,13 @@ export function drawPlacementZones(ctx, width, height, time, faction, zones, opt
     ctx.textBaseline = 'top';
     ctx.fillText(`${placed}/${capacity}`, sx, sy + r + 3);
 
-    // Zone label
-    ctx.globalAlpha = selectedAssetCategory && !isCompatible ? 0.15 : 0.5;
-    ctx.font = `${Math.max(7, 8 * scaleX)}px "Courier New", monospace`;
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(zone.label, sx, sy - r - 3);
+    // Zone labels are only shown when relevant to reduce map clutter.
+    if (isHovered || selectedAssetCategory) {
+      ctx.globalAlpha = isHovered ? 0.85 : selectedAssetCategory && !isCompatible ? 0.12 : 0.42;
+      ctx.font = `${Math.max(7, 8 * scaleX)}px "Courier New", monospace`;
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(zone.label, sx, sy - r - 3);
+    }
   }
 
   ctx.setLineDash([]);

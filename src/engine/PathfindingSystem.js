@@ -2,29 +2,32 @@
 // GDD Sections 7.2.1, 11.3
 
 import { ROUTES } from '../data/mapData.js';
-import { MAP } from '../data/constants.js';
+import { MAP, SIMULATION } from '../data/constants.js';
 import { distance, angleBetween, lerpPoint, segmentLength } from '../utils/geometry.js';
 
 const NM_TO_WORLD = MAP.NM_TO_WORLD;
+const AIR_ARRIVAL_RADIUS = SIMULATION.AIR_STATION_ARRIVAL_RADIUS;
+const SURFACE_MOVEMENT_MULTIPLIER = SIMULATION.SURFACE_MOVEMENT_MULTIPLIER;
+const ASSET_MOVEMENT_MULTIPLIER = SIMULATION.ASSET_MOVEMENT_SPEED_MULTIPLIER;
 
 // Tanker spacing along route (world units between each tanker)
 const TANKER_SPACING = 40;
 // Convoy speed in knots
-const CONVOY_SPEED_KT = 25;
+const CONVOY_SPEED_KT = 25 * SURFACE_MOVEMENT_MULTIPLIER * ASSET_MOVEMENT_MULTIPLIER;
 // Convoy speed in world units per second
 const CONVOY_SPEED = CONVOY_SPEED_KT * NM_TO_WORLD / 3600;
 
-// Formation offsets from convoy center (world units)
+// Formation offsets around the moving convoy envelope.
 const FORMATION_OFFSETS = {
-  convoy_lead: { dx: 50, dy: 0 },
-  convoy_port: { dx: 0, dy: -35 },
-  convoy_starboard: { dx: 0, dy: 35 },
-  convoy_rear: { dx: -50, dy: 0 },
-  convoy_center: { dx: 0, dy: 0 },
-  fwd_0: { dx: 120, dy: -20 },
-  fwd_1: { dx: 120, dy: 20 },
-  fwd_2: { dx: 160, dy: -30 },
-  fwd_3: { dx: 160, dy: 30 },
+  convoy_lead: { along: 95, lateral: 0 },
+  convoy_port: { along: 25, lateral: -60 },
+  convoy_starboard: { along: -5, lateral: 60 },
+  convoy_rear: { along: -125, lateral: 0 },
+  convoy_center: { along: -70, lateral: 28 },
+  fwd_0: { along: 150, lateral: -28 },
+  fwd_1: { along: 150, lateral: 28 },
+  fwd_2: { along: 205, lateral: -42 },
+  fwd_3: { along: 205, lateral: 42 },
 };
 
 export default class PathfindingSystem {
@@ -41,12 +44,13 @@ export default class PathfindingSystem {
   initTankerPositions() {
     const positions = [];
     for (let i = 0; i < 5; i++) {
-      // Tankers start staggered at the west edge
+      // Tankers start staggered west of the map and continuously ingress.
       const distOffset = i * TANKER_SPACING;
-      const progress = Math.max(0, -distOffset / this.routeLength);
+      const progress = -distOffset / this.routeLength;
       positions.push({
-        progress: Math.abs(progress),
-        startDelay: distOffset / CONVOY_SPEED, // seconds until this tanker enters
+        progress,
+        distanceTraveled: progress * this.routeLength,
+        startDelay: 0,
       });
     }
     return positions;
@@ -58,15 +62,6 @@ export default class PathfindingSystem {
    */
   updateTankerPosition(tanker, deltaTime) {
     if (tanker.isDestroyed || tanker.hasEscaped) return false;
-
-    // If tanker hasn't entered yet, decrement delay
-    if (tanker.startDelay > 0) {
-      tanker.startDelay -= deltaTime;
-      if (tanker.startDelay > 0) return false;
-      // Overflow into movement
-      deltaTime = -tanker.startDelay;
-      tanker.startDelay = 0;
-    }
 
     const advanceDist = CONVOY_SPEED * deltaTime;
     tanker.distanceTraveled = (tanker.distanceTraveled || 0) + advanceDist;
@@ -80,8 +75,8 @@ export default class PathfindingSystem {
     }
 
     // Find position along route
-    const pos = this.getPositionAtProgress(tanker.progress);
-    const nextPos = this.getPositionAtProgress(Math.min(1, tanker.progress + 0.01));
+    const pos = this.getPositionAtProgress(tanker.progress, true);
+    const nextPos = this.getPositionAtProgress(tanker.progress + 0.01, true);
     tanker.position = pos;
     tanker.rotation = angleBetween(pos, nextPos);
     return false;
@@ -119,27 +114,20 @@ export default class PathfindingSystem {
     const offset = FORMATION_OFFSETS[escort.assignedZone];
     if (!offset) return; // Not a formation escort
 
-    const center = this.getConvoyCenter(tankers);
     const leadProgress = this.getLeadTankerProgress(tankers);
-    const heading = leadProgress < 1
-      ? angleBetween(
-          this.getPositionAtProgress(Math.max(0, leadProgress - 0.01)),
-          this.getPositionAtProgress(Math.min(1, leadProgress + 0.01))
-        )
-      : 0;
-
-    // Rotate offset by convoy heading
-    const cos = Math.cos(heading);
-    const sin = Math.sin(heading);
-    const targetX = center.x + offset.dx * cos - offset.dy * sin;
-    const targetY = center.y + offset.dx * sin + offset.dy * cos;
+    const formationProgress = leadProgress + (offset.along / this.routeLength);
+    const target = this.getOffsetPositionAtProgress(formationProgress, offset.lateral);
+    const heading = this.getHeadingAtProgress(formationProgress);
+    const targetX = target.x;
+    const targetY = target.y;
 
     // Move toward target position at escort's speed
-    const speedWU = escort.speed * NM_TO_WORLD / 3600;
+    const speedWU = escort.speed * SURFACE_MOVEMENT_MULTIPLIER * ASSET_MOVEMENT_MULTIPLIER * NM_TO_WORLD / 3600;
     const maxMove = speedWU * deltaTime;
     const dx = targetX - escort.position.x;
     const dy = targetY - escort.position.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
+    const previousPosition = { ...escort.position };
 
     if (dist < maxMove) {
       escort.position = { x: targetX, y: targetY };
@@ -149,7 +137,137 @@ export default class PathfindingSystem {
         y: escort.position.y + (dy / dist) * maxMove,
       };
     }
-    escort.rotation = angleBetween(escort.position, { x: targetX, y: targetY });
+    escort.rotation = dist > 0.001
+      ? angleBetween(previousPosition, { x: targetX, y: targetY })
+      : heading;
+
+  }
+
+  getFormationPositionAtProgress(zoneId, progress = 0) {
+    const offset = FORMATION_OFFSETS[zoneId];
+    if (!offset) {
+      return this.getPositionAtProgress(progress, true);
+    }
+
+    return this.getOffsetPositionAtProgress(progress + (offset.along / this.routeLength), offset.lateral);
+  }
+
+  moveTowardPoint(entity, targetPosition, deltaTime, arrivalRadius = 1) {
+    const movementMultiplier = entity.type === 'AIR'
+      ? ASSET_MOVEMENT_MULTIPLIER
+      : SURFACE_MOVEMENT_MULTIPLIER * ASSET_MOVEMENT_MULTIPLIER;
+    const speedWU = entity.speed * movementMultiplier * NM_TO_WORLD / 3600;
+    const maxMove = speedWU * deltaTime;
+    const dx = targetPosition.x - entity.position.x;
+    const dy = targetPosition.y - entity.position.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist <= arrivalRadius) {
+      entity.position = { ...targetPosition };
+      return true;
+    }
+
+    const heading = angleBetween(entity.position, targetPosition);
+    entity.rotation = heading;
+
+    if (dist <= maxMove) {
+      entity.position = { ...targetPosition };
+      return true;
+    }
+
+    entity.position = {
+      x: entity.position.x + (dx / dist) * maxMove,
+      y: entity.position.y + (dy / dist) * maxMove,
+    };
+    return false;
+  }
+
+  updateTransitAsset(entity, targetPosition, deltaTime) {
+    if (entity.isDestroyed || !targetPosition) return false;
+    return this.moveTowardPoint(entity, targetPosition, deltaTime, AIR_ARRIVAL_RADIUS);
+  }
+
+  getHeadingAtProgress(progress) {
+    const current = this.getPositionAtProgress(progress, true);
+    const next = this.getPositionAtProgress(progress + 0.01, true);
+    return angleBetween(current, next);
+  }
+
+  getOffsetPositionAtProgress(progress, lateralOffset = 0) {
+    const anchor = this.getPositionAtProgress(progress, true);
+    const heading = this.getHeadingAtProgress(progress);
+    return {
+      x: anchor.x - Math.sin(heading) * lateralOffset,
+      y: anchor.y + Math.cos(heading) * lateralOffset,
+    };
+  }
+
+  projectPointOntoRoute(point) {
+    let best = {
+      progress: 0,
+      position: { ...this.waypoints[0] },
+      distance: Infinity,
+      heading: this.getHeadingAtProgress(0),
+      segmentIndex: 0,
+    };
+
+    let traversed = 0;
+    for (let i = 1; i < this.waypoints.length; i++) {
+      const start = this.waypoints[i - 1];
+      const end = this.waypoints[i];
+      const segDx = end.x - start.x;
+      const segDy = end.y - start.y;
+      const segLenSq = segDx * segDx + segDy * segDy;
+      const segLen = Math.sqrt(segLenSq);
+      const rawT = segLenSq > 0
+        ? ((point.x - start.x) * segDx + (point.y - start.y) * segDy) / segLenSq
+        : 0;
+      const t = Math.max(0, Math.min(1, rawT));
+      const projected = {
+        x: start.x + segDx * t,
+        y: start.y + segDy * t,
+      };
+      const dist = distance(point, projected);
+
+      if (dist < best.distance) {
+        best = {
+          progress: (traversed + segLen * t) / this.routeLength,
+          position: projected,
+          distance: dist,
+          heading: angleBetween(start, end),
+          segmentIndex: i - 1,
+        };
+      }
+
+      traversed += segLen;
+    }
+
+    return best;
+  }
+
+  getLateralOffsetForPoint(point) {
+    const projection = this.projectPointOntoRoute(point);
+    const dx = point.x - projection.position.x;
+    const dy = point.y - projection.position.y;
+    const lateralOffset = -dx * Math.sin(projection.heading) + dy * Math.cos(projection.heading);
+    return { ...projection, lateralOffset };
+  }
+
+  getConvoyArrivalTime(progress) {
+    return (Math.max(0, progress) * this.routeLength) / CONVOY_SPEED;
+  }
+
+  updateRouteFollowingAsset(entity, deltaTime) {
+    if (entity.isDestroyed) return;
+
+    const speedWU = entity.speed * SURFACE_MOVEMENT_MULTIPLIER * ASSET_MOVEMENT_MULTIPLIER * NM_TO_WORLD / 3600;
+    entity.routeDistanceTraveled = (entity.routeDistanceTraveled || 0) + speedWU * deltaTime;
+    entity.routeProgress = entity.routeDistanceTraveled / this.routeLength;
+    entity.position = this.getOffsetPositionAtProgress(
+      entity.routeProgress || 0,
+      entity.routeLateralOffset || 0
+    );
+    entity.rotation = this.getHeadingAtProgress(entity.routeProgress || 0);
   }
 
   /**
@@ -160,18 +278,7 @@ export default class PathfindingSystem {
 
     // If entity has a target and is engaging, move toward it
     if (entity.engageTarget) {
-      const speedWU = entity.speed * NM_TO_WORLD / 3600;
-      const maxMove = speedWU * deltaTime;
-      const dx = entity.engageTarget.x - entity.position.x;
-      const dy = entity.engageTarget.y - entity.position.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > maxMove) {
-        entity.position = {
-          x: entity.position.x + (dx / dist) * maxMove,
-          y: entity.position.y + (dy / dist) * maxMove,
-        };
-      }
-      entity.rotation = angleBetween(entity.position, entity.engageTarget);
+      this.moveTowardPoint(entity, entity.engageTarget, deltaTime);
       return;
     }
 
@@ -188,26 +295,41 @@ export default class PathfindingSystem {
     const targetX = home.x + Math.cos(entity.patrolAngle) * orbitRadius;
     const targetY = home.y + Math.sin(entity.patrolAngle) * orbitRadius;
 
-    const speedWU = Math.min(entity.speed * NM_TO_WORLD / 3600, 15); // cap patrol movement
-    const maxMove = speedWU * deltaTime;
     const dx = targetX - entity.position.x;
     const dy = targetY - entity.position.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
     if (dist > 1) {
-      const move = Math.min(maxMove, dist);
-      entity.position = {
-        x: entity.position.x + (dx / dist) * move,
-        y: entity.position.y + (dy / dist) * move,
-      };
-      entity.rotation = angleBetween(entity.position, { x: targetX, y: targetY });
+      this.moveTowardPoint(entity, { x: targetX, y: targetY }, deltaTime);
     }
   }
 
   /**
    * Get world position at a given progress (0-1) along the route.
    */
-  getPositionAtProgress(progress) {
+  getPositionAtProgress(progress, allowExtrapolation = false) {
+    if (allowExtrapolation && progress > 1) {
+      const extraDist = (progress - 1) * this.routeLength;
+      const end = this.waypoints[this.waypoints.length - 1];
+      const prev = this.waypoints[this.waypoints.length - 2];
+      const heading = angleBetween(prev, end);
+      return {
+        x: end.x + Math.cos(heading) * extraDist,
+        y: end.y + Math.sin(heading) * extraDist,
+      };
+    }
+
+    if (allowExtrapolation && progress < 0) {
+      const extraDist = Math.abs(progress) * this.routeLength;
+      const start = this.waypoints[0];
+      const next = this.waypoints[1];
+      const heading = angleBetween(start, next);
+      return {
+        x: start.x - Math.cos(heading) * extraDist,
+        y: start.y - Math.sin(heading) * extraDist,
+      };
+    }
+
     const clamped = Math.max(0, Math.min(1, progress));
     let targetDist = clamped * this.routeLength;
 

@@ -42,8 +42,8 @@ export default class CombatResolver {
   }
 
   /**
-   * Resolve a single combat engagement between attacker and target.
-   * Returns event object or null if cannot fire.
+   * Resolve a single combat shot.
+   * Returns shot data; impact is applied later by the engine.
    */
   resolveCombat(attacker, target, jammers) {
     if (attacker.reloadCooldown > 0) return null;
@@ -70,23 +70,15 @@ export default class CombatResolver {
 
     if (roll < hitProb) {
       let cmMitigation = COMBAT.CM_MITIGATION[target.countermeasures] || 0;
-      // Emergency Evasion ability boost
       if (target.cmBoost) cmMitigation = Math.min(1, cmMitigation + target.cmBoost);
       const finalDamage = Math.round(attacker.damage * (1 - cmMitigation));
-      target.hp -= finalDamage;
-
-      const destroyed = target.hp <= 0;
-      if (destroyed) {
-        target.hp = 0;
-        target.isDestroyed = true;
-      }
 
       return {
         type: 'COMBAT_HIT',
+        willHit: true,
         attackerId: attacker.id,
         targetId: target.id,
         damage: finalDamage,
-        destroyed,
         attackerName: attacker.name,
         targetName: target.name,
       };
@@ -94,6 +86,7 @@ export default class CombatResolver {
 
     return {
       type: 'COMBAT_MISS',
+      willHit: false,
       attackerId: attacker.id,
       targetId: target.id,
       attackerName: attacker.name,

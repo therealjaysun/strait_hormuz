@@ -17,7 +17,6 @@ const TYPE_LABELS = {
   SURFACE: 'SURFACE',
   SUBSURFACE: 'SUBSURFACE',
   AIR: 'AIR',
-  FIXED: 'FIXED',
   TANKER: 'TANKER',
   MINE: 'MINE',
 };
@@ -95,6 +94,17 @@ export function drawWinchesterLabel(ctx, x, y, scale = 1) {
   ctx.restore();
 }
 
+export function drawMissionPhaseLabel(ctx, x, y, label, scale = 1) {
+  ctx.save();
+  ctx.font = `bold ${Math.max(7, 8 * scale)}px "Courier New", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillStyle = '#00ff88';
+  ctx.globalAlpha = 0.75;
+  ctx.fillText(label, x, y - 18 * scale);
+  ctx.restore();
+}
+
 /**
  * Draw a blinking contact blip for detected enemies.
  */
@@ -147,6 +157,9 @@ export function renderEntityHUD(ctx, width, height, entities, playerFaction, tim
       if (entity.hp < entity.maxHp) {
         drawHealthBar(ctx, x, y, entity.hp, entity.maxHp, color, scale);
       }
+      if (entity.type === 'AIR' && entity.missionPhase === 'TRANSIT') {
+        drawMissionPhaseLabel(ctx, x, y, 'TRANSIT', scale);
+      }
       if (entity.isWinchester) {
         drawWinchesterLabel(ctx, x, y, scale);
       }
@@ -155,7 +168,11 @@ export function renderEntityHUD(ctx, width, height, entities, playerFaction, tim
     // Detected enemies — classification + blip
     if (!isFriendly && isDetected) {
       drawContactBlip(ctx, x, y, time);
-      drawClassificationLabel(ctx, x, y, entity.type, scale);
+      if (entity.type === 'FIXED') {
+        drawEntityLabel(ctx, x, y, entity.name, color, scale);
+      } else {
+        drawClassificationLabel(ctx, x, y, entity.type, scale);
+      }
     }
   }
 }

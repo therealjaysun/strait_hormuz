@@ -16,6 +16,8 @@ const EFFECT_DURATIONS = {
   MINE_BLAST: 2000,
   CONTACT_BLIP: 2000,
   TOMAHAWK_TRAIL: 1500,
+  MISS_TEXT: 1100,
+  HIT_BLOOM: 900,
 };
 
 const FACTION_COLORS = {
@@ -38,12 +40,12 @@ export default class EffectsManager {
   /**
    * Add a new visual effect.
    */
-  addEffect(type, data, delay = 0) {
+  addEffect(type, data, delay = 0, durationOverride = null) {
     this.activeEffects.push({
       type,
       data,
       startTime: performance.now() + delay,
-      duration: EFFECT_DURATIONS[type] || 1500,
+      duration: durationOverride || EFFECT_DURATIONS[type] || 1500,
     });
   }
 
@@ -54,15 +56,27 @@ export default class EffectsManager {
     for (let i = processedCount; i < events.length; i++) {
       const evt = events[i];
       switch (evt.type) {
-        case 'COMBAT_HIT':
-        case 'COMBAT_MISS':
+        case 'WEAPON_FIRED':
           this.addEffect('MISSILE_TRAIL', {
             fromId: evt.data.attackerId,
             toId: evt.data.targetId,
             from: evt.data.attackerPosition,
             to: evt.data.targetPosition,
             color: FACTION_COLORS[evt.data.attackerFaction] || '#00ff88',
-            hit: evt.type === 'COMBAT_HIT',
+            hit: evt.data.hit,
+          }, 0, evt.data.visualDurationMs);
+          break;
+        case 'COMBAT_HIT':
+          this.addEffect('HIT_BLOOM', {
+            position: evt.data.targetPosition,
+            criticalHit: evt.data.criticalHit,
+            destroyed: evt.data.destroyed,
+          });
+          break;
+        case 'COMBAT_MISS':
+          this.addEffect('MISS_TEXT', {
+            position: evt.data.targetPosition,
+            text: 'MISS',
           });
           break;
         case 'ASSET_DESTROYED': {
@@ -72,17 +86,12 @@ export default class EffectsManager {
           if (evt.data.type === 'TANKER') sizeMultiplier = 2;
           else if (['thondar_fac', 'cyclone_pc'].includes(assetId)) sizeMultiplier = 0.5;
 
-          // Delay explosion so missile trail visually arrives first
-          const explosionDelay = 1200;
           this.addEffect('EXPLOSION', {
             position: evt.data.position,
             size: (evt.data.maxHp ? Math.max(15, evt.data.maxHp / 5) : 20) * sizeMultiplier,
-          }, explosionDelay);
-          // Delayed screen shake
-          setTimeout(() => {
-            this.screenShake = 200;
-            this.screenShakeStart = performance.now();
-          }, explosionDelay);
+          });
+          this.screenShake = 200;
+          this.screenShakeStart = performance.now();
           break;
         }
         case 'MINE_DETONATION':
@@ -177,6 +186,12 @@ export default class EffectsManager {
         case 'CONTACT_BLIP':
           this.drawContactBlip(ctx, effect, progress, scaleX, scaleY);
           break;
+        case 'MISS_TEXT':
+          this.drawMissText(ctx, effect, progress, scaleX, scaleY);
+          break;
+        case 'HIT_BLOOM':
+          this.drawHitBloom(ctx, effect, progress, scaleX, scaleY);
+          break;
       }
     }
 
@@ -189,17 +204,9 @@ export default class EffectsManager {
    * Draw missile trail — quadratic bezier curve with fading tail.
    */
   drawMissileTrail(ctx, effect, progress, scaleX, scaleY, entities) {
-    const { fromId, toId, color, hit } = effect.data;
-
-    // Try to get live positions from entities
-    let from = effect.data.from;
-    let to = effect.data.to;
-    if (entities) {
-      const fromEntity = entities.find(e => e.id === fromId);
-      const toEntity = entities.find(e => e.id === toId);
-      if (fromEntity) from = fromEntity.position;
-      if (toEntity) to = toEntity.position;
-    }
+    const { color, hit } = effect.data;
+    const from = effect.data.from;
+    const to = effect.data.to;
 
     if (!from || !to) return;
 
@@ -214,6 +221,7 @@ export default class EffectsManager {
     const dx = x2 - x1;
     const dy = y2 - y1;
     const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 0.001) return;
     const arcAmount = len * 0.15; // 15% arc
     const cpx = mx + (-dy / len) * arcAmount;
     const cpy = my + (dx / len) * arcAmount;
@@ -221,8 +229,8 @@ export default class EffectsManager {
     ctx.save();
 
     // Trail head moves from attacker to target
-    const headProgress = Math.min(1, progress * 2);
-    const tailProgress = Math.max(0, progress * 2 - 0.5);
+    const headProgress = Math.min(1, progress);
+    const tailProgress = Math.max(0, progress - 0.18);
 
     // Sample points on the bezier for head and tail
     const hx = bezierPoint(x1, cpx, x2, headProgress);
@@ -269,11 +277,11 @@ export default class EffectsManager {
     }
 
     // Impact flash on hit
-    if (hit && headProgress >= 0.95 && progress < 0.8) {
+    if (hit && headProgress >= 0.95 && progress < 1) {
       ctx.beginPath();
-      ctx.arc(x2, y2, 4 + (1 - progress) * 6, 0, Math.PI * 2);
+      ctx.arc(x2, y2, 4 + (1 - progress) * 4, 0, Math.PI * 2);
       ctx.fillStyle = '#ffffff';
-      ctx.globalAlpha = (1 - progress) * 0.8;
+      ctx.globalAlpha = (1 - progress) * 0.45;
       ctx.fill();
     }
 
@@ -382,6 +390,47 @@ export default class EffectsManager {
       resetBloom(ctx);
     }
 
+    ctx.restore();
+  }
+
+  drawMissText(ctx, effect, progress, scaleX, scaleY) {
+    const { position, text } = effect.data;
+    if (!position) return;
+    const x = position.x * scaleX + 12;
+    const y = position.y * scaleY - 10 - progress * 10;
+
+    ctx.save();
+    ctx.font = 'bold 13px "Courier New", monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#d6d6d6';
+    ctx.globalAlpha = 1 - progress;
+    applyBloom(ctx, '#ffffff', 4);
+    ctx.fillText(text || 'MISS', x, y);
+    resetBloom(ctx);
+    ctx.restore();
+  }
+
+  drawHitBloom(ctx, effect, progress, scaleX, scaleY) {
+    const { position, criticalHit, destroyed } = effect.data;
+    if (!position) return;
+    const x = position.x * scaleX;
+    const y = position.y * scaleY;
+    const maxRadius = (destroyed ? 38 : criticalHit ? 28 : 18) * Math.min(scaleX, scaleY);
+
+    ctx.save();
+    const radius = maxRadius * (0.25 + progress * 0.95);
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    gradient.addColorStop(0, 'rgba(120, 0, 12, 0.95)');
+    gradient.addColorStop(0.45, 'rgba(92, 0, 8, 0.55)');
+    gradient.addColorStop(1, 'rgba(32, 0, 0, 0)');
+    ctx.fillStyle = gradient;
+    ctx.globalAlpha = 1 - progress;
+    applyBloom(ctx, '#7a0010', criticalHit || destroyed ? 24 : 16);
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    resetBloom(ctx);
     ctx.restore();
   }
 

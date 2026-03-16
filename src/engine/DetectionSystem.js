@@ -9,6 +9,10 @@ const NM_TO_WORLD = MAP.NM_TO_WORLD;
 // Tracking memory — seconds before a lost contact fades
 const TRACKING_MEMORY = 10;
 
+function isDetectionEligible(entity) {
+  return entity.type !== 'AIR' || entity.missionPhase !== 'TRANSIT';
+}
+
 export default class DetectionSystem {
   constructor() {
     // Map: targetId → { faction, detectedAt (gameTime), confirmed }
@@ -22,16 +26,18 @@ export default class DetectionSystem {
    */
   update(entities, gameTime) {
     // Gather jammers
-    const jammers = entities.filter(e => !e.isDestroyed && e.isJamming);
+    const jammers = entities.filter(e => !e.isDestroyed && e.isJamming && isDetectionEligible(e));
 
     for (const detector of entities) {
       if (detector.isDestroyed || detector.radarRange === 0) continue;
+      if (!isDetectionEligible(detector)) continue;
 
       const radarRangeWU = this.getEffectiveRadarRange(detector, jammers);
 
       for (const target of entities) {
         if (target.faction === detector.faction) continue;
         if (target.isDestroyed) continue;
+        if (!isDetectionEligible(target)) continue;
 
         // Submarines: only detectable by ASW assets
         if (target.type === 'SUBSURFACE') {
@@ -157,6 +163,7 @@ export default class DetectionSystem {
       if (e.isDestroyed) continue;
       if (e.faction !== faction) continue;
       if (e.radarRange === 0) continue;
+      if (!isDetectionEligible(e)) continue;
 
       const rangeWU = this.getEffectiveRadarRange(e, jammers);
       if (distance(e.position, targetPosition) <= rangeWU) {

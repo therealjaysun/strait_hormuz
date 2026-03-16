@@ -58,17 +58,22 @@ function canPlace(slot, asset, zoneFill) {
 /** Compute attacker zone positions from route waypoints */
 function getAttackerPositions(wp) {
   return {
-    convoy_lead: { x: wp[1].x + 30, y: wp[1].y },
-    convoy_port: { x: wp[1].x, y: wp[1].y - 25 },
-    convoy_starboard: { x: wp[1].x, y: wp[1].y + 25 },
-    convoy_rear: { x: wp[1].x - 30, y: wp[1].y },
+    convoy_lead: { x: wp[1].x + 36, y: wp[1].y },
+    convoy_port: { x: wp[1].x, y: wp[1].y - 28 },
+    convoy_starboard: { x: wp[1].x, y: wp[1].y + 28 },
+    convoy_rear: { x: wp[1].x - 34, y: wp[1].y },
     convoy_center: { x: wp[1].x, y: wp[1].y },
-    fwd_0: { x: wp[2].x, y: wp[2].y - 15 },
-    fwd_1: { x: wp[2].x, y: wp[2].y + 15 },
-    cap_0: { x: wp[3].x, y: wp[3].y - 50 },
-    cap_1: { x: wp[6].x, y: wp[6].y - 50 },
-    sub_0: { x: wp[4].x, y: wp[4].y + 40 },
-    sub_1: { x: wp[7].x, y: wp[7].y - 40 },
+    fwd_0: { x: wp[2].x, y: wp[2].y - 20 },
+    fwd_1: { x: wp[2].x, y: wp[2].y + 20 },
+    fwd_2: { x: wp[3].x, y: wp[3].y - 20 },
+    fwd_3: { x: wp[3].x, y: wp[3].y + 20 },
+    cap_0: { x: wp[4].x, y: wp[4].y - 70 },
+    cap_1: { x: wp[7].x, y: wp[7].y - 65 },
+    cap_2: { x: wp[6].x, y: wp[6].y - 55 },
+    cap_3: { x: wp[9].x, y: wp[9].y - 50 },
+    sub_0: { x: wp[4].x, y: wp[4].y + 50 },
+    sub_1: { x: wp[8].x, y: wp[8].y - 55 },
+    sub_2: { x: wp[6].x, y: wp[6].y + 58 },
   };
 }
 

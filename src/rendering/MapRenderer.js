@@ -69,6 +69,91 @@ function drawPolyline(ctx, points, scaleX, scaleY) {
   ctx.stroke();
 }
 
+function traceSmoothPolyline(ctx, points, scaleX, scaleY) {
+  if (points.length < 2) return;
+  ctx.beginPath();
+  const [startX, startY] = toScreen(points[0].x, points[0].y, scaleX, scaleY);
+  ctx.moveTo(startX, startY);
+
+  if (points.length === 2) {
+    const [endX, endY] = toScreen(points[1].x, points[1].y, scaleX, scaleY);
+    ctx.lineTo(endX, endY);
+    return;
+  }
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const current = points[i];
+    const next = points[i + 1];
+    const [cx, cy] = toScreen(current.x, current.y, scaleX, scaleY);
+    const [mx, my] = toScreen((current.x + next.x) / 2, (current.y + next.y) / 2, scaleX, scaleY);
+    ctx.quadraticCurveTo(cx, cy, mx, my);
+  }
+
+  const last = points[points.length - 1];
+  const [endX, endY] = toScreen(last.x, last.y, scaleX, scaleY);
+  ctx.lineTo(endX, endY);
+}
+
+function strokeSmoothPolyline(ctx, points, scaleX, scaleY) {
+  traceSmoothPolyline(ctx, points, scaleX, scaleY);
+  ctx.stroke();
+}
+
+function getPointAlongPolyline(points, progress) {
+  if (points.length < 2) return null;
+
+  const segmentLengths = [];
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    segmentLengths.push(len);
+    total += len;
+  }
+
+  let remaining = total * progress;
+  for (let i = 1; i < points.length; i++) {
+    const len = segmentLengths[i - 1];
+    if (remaining <= len) {
+      const t = len > 0 ? remaining / len : 0;
+      const start = points[i - 1];
+      const end = points[i];
+      return {
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+        angle: Math.atan2(end.y - start.y, end.x - start.x),
+      };
+    }
+    remaining -= len;
+  }
+
+  const prev = points[points.length - 2];
+  const end = points[points.length - 1];
+  return {
+    x: end.x,
+    y: end.y,
+    angle: Math.atan2(end.y - prev.y, end.x - prev.x),
+  };
+}
+
+function drawArrowhead(ctx, point, angle, scaleX, scaleY, color, size = 8, alpha = 0.85) {
+  const x = point.x * scaleX;
+  const y = point.y * scaleY;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.moveTo(size, 0);
+  ctx.lineTo(-size * 0.7, -size * 0.55);
+  ctx.lineTo(-size * 0.7, size * 0.55);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 /**
  * Draw a filled + outlined polygon from an array of {x, y} points.
  */
@@ -104,7 +189,6 @@ function drawCoastlines(ctx, scaleX, scaleY) {
 
   // Omani coast land fill below coastline
   ctx.beginPath();
-  const omLast = omaniCoastline[omaniCoastline.length - 1];
   ctx.moveTo(0, MAP_BOUNDS.height * scaleY);
   for (const p of omaniCoastline) {
     const [sx, sy] = toScreen(p.x, p.y, scaleX, scaleY);
@@ -118,8 +202,8 @@ function drawCoastlines(ctx, scaleX, scaleY) {
   applyBloom(ctx, COASTLINE_COLOR, 10);
   ctx.strokeStyle = COASTLINE_COLOR;
   ctx.lineWidth = 2;
-  drawPolyline(ctx, iranianCoastline, scaleX, scaleY);
-  drawPolyline(ctx, omaniCoastline, scaleX, scaleY);
+  strokeSmoothPolyline(ctx, iranianCoastline, scaleX, scaleY);
+  strokeSmoothPolyline(ctx, omaniCoastline, scaleX, scaleY);
   resetBloom(ctx);
 
   ctx.restore();
@@ -144,15 +228,16 @@ function drawIslands(ctx, scaleX, scaleY) {
     ctx.stroke();
     resetBloom(ctx);
 
-    // Label
-    const [cx, cy] = toScreen(island.center.x, island.center.y, scaleX, scaleY);
-    ctx.fillStyle = 'rgba(0, 255, 136, 0.6)';
-    ctx.font = `${Math.max(9, 10 * scaleX)}px "Courier New", monospace`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    applyBloom(ctx, COASTLINE_COLOR, 4);
-    ctx.fillText(island.name, cx, cy);
-    resetBloom(ctx);
+    if (!['Lesser Tunb', 'Siri'].includes(island.name)) {
+      const [cx, cy] = toScreen(island.center.x, island.center.y, scaleX, scaleY);
+      ctx.fillStyle = 'rgba(0, 255, 136, 0.48)';
+      ctx.font = `${Math.max(8, 9 * scaleX)}px "Courier New", monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      applyBloom(ctx, COASTLINE_COLOR, 3);
+      ctx.fillText(island.name, cx, cy);
+      resetBloom(ctx);
+    }
 
     ctx.restore();
   }
@@ -160,22 +245,22 @@ function drawIslands(ctx, scaleX, scaleY) {
 
 function drawDepthContours(ctx, scaleX, scaleY) {
   ctx.save();
-  ctx.strokeStyle = 'rgba(0, 255, 136, 0.08)';
-  ctx.lineWidth = 0.5;
+  ctx.strokeStyle = 'rgba(0, 255, 136, 0.05)';
+  ctx.lineWidth = 0.6;
   for (const contour of depthContours) {
-    drawPolyline(ctx, contour, scaleX, scaleY);
+    strokeSmoothPolyline(ctx, contour, scaleX, scaleY);
   }
   ctx.restore();
 }
 
 function drawGrid(ctx, scaleX, scaleY) {
   ctx.save();
-  ctx.strokeStyle = GRID_COLOR;
-  ctx.lineWidth = 0.5;
+  ctx.strokeStyle = 'rgba(17, 34, 17, 0.55)';
+  ctx.lineWidth = 0.7;
 
   const w = MAP_BOUNDS.width;
   const h = MAP_BOUNDS.height;
-  const step = 50;
+  const step = 100;
 
   // Vertical lines
   for (let x = 0; x <= w; x += step) {
@@ -201,13 +286,13 @@ function drawGrid(ctx, scaleX, scaleY) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
 
-  for (let x = 0; x <= w; x += 100) {
+  for (let x = 0; x <= w; x += 200) {
     ctx.fillText(String(x), x * scaleX, 2);
   }
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  for (let y = 0; y <= h; y += 100) {
+  for (let y = 0; y <= h; y += 200) {
     ctx.fillText(String(y), 2, y * scaleY);
   }
 
@@ -218,29 +303,25 @@ function drawTSSLanes(ctx, scaleX, scaleY) {
   ctx.save();
 
   // Outbound lane (active) — dashed
-  ctx.setLineDash([12, 8]);
-  ctx.strokeStyle = 'rgba(0, 255, 136, 0.3)';
+  ctx.setLineDash([10, 10]);
+  ctx.strokeStyle = 'rgba(0, 255, 136, 0.22)';
   ctx.lineWidth = 1;
-  drawPolyline(ctx, [tssOutbound.north[0], tssOutbound.north[1]], scaleX, scaleY);
-  drawPolyline(ctx, [tssOutbound.south[0], tssOutbound.south[1]], scaleX, scaleY);
+  strokeSmoothPolyline(ctx, tssOutbound.north, scaleX, scaleY);
+  strokeSmoothPolyline(ctx, tssOutbound.south, scaleX, scaleY);
 
   // Inbound lane (dimmed) — dashed
-  ctx.strokeStyle = 'rgba(0, 255, 136, 0.15)';
-  drawPolyline(ctx, [tssInbound.north[0], tssInbound.north[1]], scaleX, scaleY);
-  drawPolyline(ctx, [tssInbound.south[0], tssInbound.south[1]], scaleX, scaleY);
+  ctx.strokeStyle = 'rgba(0, 255, 136, 0.12)';
+  strokeSmoothPolyline(ctx, tssInbound.north, scaleX, scaleY);
+  strokeSmoothPolyline(ctx, tssInbound.south, scaleX, scaleY);
 
   // Median buffer — dotted
   ctx.setLineDash([3, 6]);
   ctx.strokeStyle = 'rgba(0, 255, 136, 0.12)';
-  const medianNorth = {
-    x: (tssOutbound.south[0].x + tssInbound.north[0].x) / 2,
-    y: (tssOutbound.south[0].y + tssInbound.north[0].y) / 2,
-  };
-  const medianSouth = {
-    x: (tssOutbound.south[1].x + tssInbound.north[1].x) / 2,
-    y: (tssOutbound.south[1].y + tssInbound.north[1].y) / 2,
-  };
-  drawPolyline(ctx, [medianNorth, medianSouth], scaleX, scaleY);
+  const median = tssOutbound.south.map((point, index) => ({
+    x: (point.x + tssInbound.north[index].x) / 2,
+    y: (point.y + tssInbound.north[index].y) / 2,
+  }));
+  strokeSmoothPolyline(ctx, median, scaleX, scaleY);
 
   ctx.setLineDash([]);
   ctx.restore();
@@ -271,17 +352,24 @@ function drawRoutes(ctx, scaleX, scaleY, selectedRoutes) {
       // Active route — solid with glow
       applyBloom(ctx, routeColor, 8);
       ctx.strokeStyle = routeColor;
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 2.3;
       ctx.setLineDash([]);
     } else {
       // Inactive route — dashed, dimmed
       resetBloom(ctx);
-      ctx.strokeStyle = 'rgba(51, 153, 255, 0.3)';
+      ctx.strokeStyle = 'rgba(51, 153, 255, 0.22)';
       ctx.lineWidth = 1;
-      ctx.setLineDash([8, 6]);
+      ctx.setLineDash([10, 8]);
     }
 
-    drawPolyline(ctx, route.waypoints, scaleX, scaleY);
+    strokeSmoothPolyline(ctx, route.waypoints, scaleX, scaleY);
+
+    if (isActive) {
+      const arrowA = getPointAlongPolyline(route.waypoints, 0.55);
+      const arrowB = getPointAlongPolyline(route.waypoints, 0.8);
+      if (arrowA) drawArrowhead(ctx, arrowA, arrowA.angle, scaleX, scaleY, routeColor, 7, 0.75);
+      if (arrowB) drawArrowhead(ctx, arrowB, arrowB.angle, scaleX, scaleY, routeColor, 8, 0.9);
+    }
 
     // Route label at the entry point (west edge)
     const labelPos = route.waypoints[0];
@@ -301,28 +389,28 @@ function drawRoutes(ctx, scaleX, scaleY, selectedRoutes) {
 // Labels for geographic features
 function drawLabels(ctx, scaleX, scaleY) {
   ctx.save();
-  ctx.fillStyle = 'rgba(0, 255, 136, 0.25)';
-  ctx.font = `${Math.max(10, 12 * scaleX)}px "Courier New", monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // Persian Gulf label (left side)
-  ctx.fillText('PERSIAN GULF', 80 * scaleX, 350 * scaleY);
+  const theaterLabels = [
+    { text: 'PERSIAN GULF', x: 190, y: 372, alpha: 0.18, size: 13 },
+    { text: 'GULF OF OMAN', x: 900, y: 300, alpha: 0.18, size: 13 },
+    { text: 'STRAIT OF HORMUZ', x: 670, y: 182, alpha: 0.12, size: 13 },
+    { text: 'IRAN', x: 430, y: 36, alpha: 0.18, size: 12 },
+    { text: 'UAE', x: 240, y: 520, alpha: 0.16, size: 11 },
+    { text: 'OMAN', x: 870, y: 394, alpha: 0.16, size: 11 },
+    { text: 'MUSANDAM', x: 626, y: 296, alpha: 0.18, size: 9 },
+    { text: 'BANDAR ABBAS', x: 704, y: 18, alpha: 0.26, size: 8 },
+    { text: 'KHASAB', x: 618, y: 228, alpha: 0.24, size: 8 },
+    { text: 'RAS AL-KHAIMAH', x: 548, y: 364, alpha: 0.22, size: 8 },
+    { text: 'FUJAIRAH', x: 692, y: 438, alpha: 0.22, size: 8 },
+  ];
 
-  // Gulf of Oman label (right side)
-  ctx.fillText('GULF OF OMAN', 920 * scaleX, 200 * scaleY);
-
-  // Strait of Hormuz label (center)
-  ctx.fillStyle = 'rgba(0, 255, 136, 0.15)';
-  ctx.font = `${Math.max(12, 14 * scaleX)}px "Courier New", monospace`;
-  ctx.fillText('STRAIT OF HORMUZ', 500 * scaleX, 300 * scaleY);
-
-  // Iran / Oman labels
-  ctx.fillStyle = 'rgba(0, 255, 136, 0.2)';
-  ctx.font = `${Math.max(10, 12 * scaleX)}px "Courier New", monospace`;
-  ctx.fillText('IRAN', 500 * scaleX, 25 * scaleY);
-  ctx.fillText('OMAN', 750 * scaleX, 450 * scaleY);
-  ctx.fillText('MUSANDAM', 720 * scaleX, 340 * scaleY);
+  for (const label of theaterLabels) {
+    ctx.fillStyle = `rgba(0, 255, 136, ${label.alpha})`;
+    ctx.font = `${Math.max(9, label.size * scaleX)}px "Courier New", monospace`;
+    ctx.fillText(label.text, label.x * scaleX, label.y * scaleY);
+  }
 
   ctx.restore();
 }

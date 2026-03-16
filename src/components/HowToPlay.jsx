@@ -28,6 +28,7 @@ const SECTIONS = [
       'Place assets into designated zones on the map:',
       '  - Click an asset in the equipment panel to select it',
       '  - Click a valid placement zone on the map to deploy',
+      '  - Aircraft and EW assets are assigned to patrol/CAP stations, then launch into the fight at sim start',
       '  - Right-click a placed asset to remove it and refund the cost',
       '  - Attackers must also select a convoy route (Alpha, Bravo, or Charlie)',
       '',

@@ -60,6 +60,8 @@ export const COMBAT = {
   EW_JAMMING_PENALTY: -0.30,
   FAST_MOVER_PENALTY: -0.10,
   FAST_MOVER_THRESHOLD: 100, // knots — above this, fast mover penalty applies
+  BASE_MISSILE_SPEED_KT: 2400,
+  MISSILE_SPEED_FACTOR: 0.50,
   CM_MITIGATION: { NONE: 0, BASIC: 0.20, ADVANCED: 0.40 },
   MINE_TRIGGER_RADIUS: 0.2, // nm
   MINE_DAMAGE: 150,
@@ -75,6 +77,14 @@ export const SIMULATION = {
   SPEEDS: [1, 2, 4, 8],
   TIME_LIMIT: 1800, // 30 minutes game time in seconds
   TANKER_ESCAPE_THRESHOLD: 0.75, // 75% route progress counts as escaped at time limit
+  AIR_STATION_ARRIVAL_RADIUS: 8, // world units
+  ASSET_MOVEMENT_SPEED_MULTIPLIER: 4,
+  SURFACE_MOVEMENT_MULTIPLIER: 4, // compress naval movement to fit scenario time scale
+};
+
+export const AIR_MISSION_PHASES = {
+  TRANSIT: 'TRANSIT',
+  ON_STATION: 'ON_STATION',
 };
 
 // Map / unit conversion
@@ -82,7 +92,11 @@ export const MAP = {
   WIDTH: 1000,
   HEIGHT: 600,
   STRAIT_WIDTH_NM: 21, // nautical miles at the narrows
-  NM_TO_WORLD: 28.6, // ~600 / 21
+  NM_TO_WORLD: 22, // tuned for the expanded theater while preserving transit pacing
+  LAT_MIN: 25.25,
+  LAT_MAX: 27.15,
+  LON_MIN: 54.4,
+  LON_MAX: 58.1,
 };
 
 // Scoring weights — GDD Section 8.2.6

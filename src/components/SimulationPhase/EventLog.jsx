@@ -2,6 +2,7 @@
 // GDD Section 7.4.1
 
 import { useRef, useEffect } from 'react';
+import { MAP } from '../../data/constants.js';
 
 const MAX_ENTRIES = 50;
 
@@ -21,9 +22,10 @@ function formatTime(gameTime) {
  */
 function gridCoord(position) {
   if (!position) return 'UNKNOWN';
-  // Map world coords to approximate lat/lon in the strait area
-  const lat = (26.0 + (1 - position.y / 600) * 0.8).toFixed(2);
-  const lon = (55.5 + (position.x / 1000) * 1.2).toFixed(2);
+  const latRange = MAP.LAT_MAX - MAP.LAT_MIN;
+  const lonRange = MAP.LON_MAX - MAP.LON_MIN;
+  const lat = (MAP.LAT_MIN + (1 - position.y / MAP.HEIGHT) * latRange).toFixed(2);
+  const lon = (MAP.LON_MIN + (position.x / MAP.WIDTH) * lonRange).toFixed(2);
   return `${lat}N ${lon}E`;
 }
 

@@ -40,6 +40,10 @@ const EQUIPMENT_ICON_MAP = {
   ea18g_growler: 'EW_AIRCRAFT',
 };
 
+function isAirPlacementCategory(category) {
+  return category === 'AERIAL' || category === 'DRONE' || category === 'EW';
+}
+
 // Compute attacker zone positions from route waypoints
 function getAttackerZonePositions(routeKey) {
   const route = ROUTES[routeKey];
@@ -63,6 +67,71 @@ function getAttackerZonePositions(routeKey) {
     sub_1: { x: wp[7].x, y: wp[7].y - 40 },
     sub_2: { x: wp[5].x, y: wp[5].y + 50 },
   };
+}
+
+function getNearestPathHeading(position, waypoints) {
+  if (!position || !waypoints || waypoints.length < 2) return 0;
+
+  let bestDistanceSq = Infinity;
+  let bestHeading = 0;
+
+  for (let i = 1; i < waypoints.length; i++) {
+    const start = waypoints[i - 1];
+    const end = waypoints[i];
+    const segDx = end.x - start.x;
+    const segDy = end.y - start.y;
+    const segLenSq = segDx * segDx + segDy * segDy;
+    if (segLenSq === 0) continue;
+
+    const t = Math.max(0, Math.min(1,
+      ((position.x - start.x) * segDx + (position.y - start.y) * segDy) / segLenSq
+    ));
+    const projX = start.x + segDx * t;
+    const projY = start.y + segDy * t;
+    const dx = position.x - projX;
+    const dy = position.y - projY;
+    const distSq = dx * dx + dy * dy;
+
+    if (distSq < bestDistanceSq) {
+      bestDistanceSq = distSq;
+      bestHeading = Math.atan2(segDy, segDx);
+    }
+  }
+
+  return bestHeading;
+}
+
+function getPlacementRotation(placement, asset, playerFaction, primaryRoute) {
+  if (!placement || !asset) return 0;
+  if (!['NAVAL', 'ESCORT', 'SUBMARINE', 'MINE_LAYER', 'AERIAL', 'EW'].includes(asset.category)) {
+    return 0;
+  }
+
+  if (playerFaction === 'ATTACKER' && primaryRoute && ROUTES[primaryRoute]) {
+    return getNearestPathHeading(placement.position, ROUTES[primaryRoute].waypoints);
+  }
+
+  const routeKeys = ['ALPHA', 'BRAVO', 'CHARLIE'];
+  let bestHeading = 0;
+  let bestDistanceSq = Infinity;
+
+  for (const key of routeKeys) {
+    const route = ROUTES[key];
+    if (!route) continue;
+    const heading = getNearestPathHeading(placement.position, route.waypoints);
+    const nearest = route.waypoints.reduce((best, point) => {
+      const dx = point.x - placement.position.x;
+      const dy = point.y - placement.position.y;
+      const distSq = dx * dx + dy * dy;
+      return distSq < best ? distSq : best;
+    }, Infinity);
+    if (nearest < bestDistanceSq) {
+      bestDistanceSq = nearest;
+      bestHeading = heading;
+    }
+  }
+
+  return bestHeading;
 }
 
 // Flatten zone structure into a flat array of slots with metadata
@@ -95,6 +164,9 @@ function placementReducer(state, action) {
   switch (action.type) {
     case 'PLACE_ASSET': {
       const { asset, zoneId, position } = action;
+      const statusText = isAirPlacementCategory(asset.category)
+        ? `${asset.name} ASSIGNED TO STATION`
+        : `${asset.name} DEPLOYED`;
       return {
         ...state,
         placements: [
@@ -112,7 +184,7 @@ function placementReducer(state, action) {
           [asset.id]: (state.stockUsed[asset.id] || 0) + 1,
         },
         selectedAssetId: null,
-        message: { text: `${asset.name} DEPLOYED`, type: 'success', time: Date.now() },
+        message: { text: statusText, type: 'success', time: Date.now() },
       };
     }
     case 'REMOVE_ASSET': {
@@ -267,7 +339,16 @@ export default function PlanningPhase({ gameState, dispatch }) {
         const sx = p.position.x * scaleX;
         const sy = p.position.y * scaleY;
         const iconType = EQUIPMENT_ICON_MAP[p.assetId] || 'DEFAULT';
-        drawAssetIcon(ctx, sx, sy, iconType, playerFaction, 0, 1.2, { selected: false });
+        drawAssetIcon(
+          ctx,
+          sx,
+          sy,
+          iconType,
+          playerFaction,
+          getPlacementRotation(p, equipmentById[p.assetId], playerFaction, primaryRoute),
+          1.2,
+          { selected: false, showHeading: true }
+        );
       }
 
       // CRT effects
@@ -580,7 +661,9 @@ export default function PlanningPhase({ gameState, dispatch }) {
                 letterSpacing: '1px',
               }}
             >
-              PLACING: {selectedAsset.name} — CLICK A VALID ZONE
+              {isAirPlacementCategory(selectedAsset.category)
+                ? `ASSIGNING STATION: ${selectedAsset.name} — CLICK A VALID STATION`
+                : `PLACING: ${selectedAsset.name} — CLICK A VALID ZONE`}
             </div>
           )}
         </div>
