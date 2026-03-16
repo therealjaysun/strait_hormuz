@@ -1,0 +1,258 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg: #0a0a14;
+  --color-coastline: #00ff88;
+  --color-grid: #112211;
+  --color-defender: #ff3333;
+  --color-attacker: #3399ff;
+  --color-tanker: #ffaa00;
+  --color-radar: rgba(0, 255, 136, 0.25);
+  --color-explosion-start: #ff6600;
+  --color-explosion-end: #ff0000;
+  --color-text: #00ff88;
+  --color-warning: #ff3333;
+  --color-mine: #ffff00;
+  --color-smoke: rgba(136, 136, 136, 0.25);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--color-bg);
+  font-family: 'Courier New', Courier, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-text);
+}
+
+/* CRT scan line overlay */
+.crt-overlay {
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.05) 2px,
+    rgba(0, 0, 0, 0.05) 4px
+  );
+}
+
+/* CRT vignette overlay */
+.crt-vignette {
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 9998;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 50%,
+    rgba(0, 0, 0, 0.4) 100%
+  );
+}
+
+/* Phosphor text glow */
+.text-glow {
+  text-shadow: 0 0 10px var(--color-text);
+}
+
+.text-glow-strong {
+  text-shadow:
+    0 0 10px var(--color-text),
+    0 0 20px var(--color-text),
+    0 0 40px var(--color-text);
+}
+
+/* CRT button style */
+.crt-button {
+  font-family: 'Courier New', Courier, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid var(--color-text);
+  padding: 12px 32px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-shadow: 0 0 8px var(--color-text);
+  box-shadow: 0 0 8px rgba(0, 255, 136, 0.15);
+}
+
+.crt-button:hover {
+  background: rgba(0, 255, 136, 0.1);
+  border-color: var(--color-text);
+  box-shadow:
+    0 0 15px rgba(0, 255, 136, 0.3),
+    inset 0 0 15px rgba(0, 255, 136, 0.05);
+  text-shadow:
+    0 0 10px var(--color-text),
+    0 0 20px var(--color-text);
+}
+
+.crt-button:active {
+  background: rgba(0, 255, 136, 0.2);
+}
+
+.crt-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Faction-colored button variants */
+.crt-button-defender {
+  color: var(--color-defender);
+  border-color: var(--color-defender);
+  text-shadow: 0 0 8px var(--color-defender);
+  box-shadow: 0 0 8px rgba(255, 51, 51, 0.15);
+}
+
+.crt-button-defender:hover {
+  background: rgba(255, 51, 51, 0.1);
+  box-shadow: 0 0 15px rgba(255, 51, 51, 0.3);
+}
+
+.crt-button-attacker {
+  color: var(--color-attacker);
+  border-color: var(--color-attacker);
+  text-shadow: 0 0 8px var(--color-attacker);
+  box-shadow: 0 0 8px rgba(51, 153, 255, 0.15);
+}
+
+.crt-button-attacker:hover {
+  background: rgba(51, 153, 255, 0.1);
+  box-shadow: 0 0 15px rgba(51, 153, 255, 0.3);
+}
+
+/* Screen reader only utility */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Keyboard shortcut hint */
+.kbd-hint {
+  font-size: 9px;
+  opacity: 0.4;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* ── High-Contrast Mode ── */
+.high-contrast {
+  --color-grid: #224422;
+}
+
+.high-contrast .crt-overlay {
+  background: repeating-linear-gradient(
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.10) 2px,
+    rgba(0, 0, 0, 0.10) 4px
+  );
+}
+
+.high-contrast .text-glow,
+.high-contrast .text-glow-strong {
+  opacity: 1;
+}
+
+.high-contrast .crt-button {
+  border-width: 2px;
+  font-weight: bold;
+}
+
+/* ── Responsive Breakpoints ── */
+
+/* Small screen warning — hidden by default */
+.small-screen-block {
+  display: none;
+}
+
+/* < 768px: Show full-screen "rotate device" message, hide game */
+@media (max-width: 767px) {
+  .small-screen-block {
+    display: flex;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 10000;
+    background-color: var(--color-bg);
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-family: 'Courier New', Courier, monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+  }
+}
+
+/* 768-1023px: Tablet — overlay panels, touch-friendly targets */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .crt-button {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 10px 20px;
+  }
+
+  .planning-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 280px;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    background-color: rgba(10, 10, 20, 0.95);
+    border-right: 1px solid rgba(0, 255, 136, 0.2);
+  }
+
+  .planning-sidebar.open {
+    transform: translateX(0);
+  }
+
+  .sim-event-log {
+    max-height: 120px;
+    overflow-y: auto;
+  }
+}
+
+/* 1024-1279px: Compact sidebar */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .planning-sidebar {
+    width: 180px;
+  }
+
+  .planning-sidebar .equipment-label {
+    display: none;
+  }
+}
+
+/* ≥1280px: Full layout — no changes needed (default) */
